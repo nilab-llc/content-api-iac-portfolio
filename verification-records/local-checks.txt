@@ -1,0 +1,22 @@
+2026-10-28 / ローカル検証結果
+
+対象: 小型コンテンツAPI Terraform版の初版
+Terraform: 1.16.6 (windows_amd64)
+AWS Provider: 6.70.0 / Archive Provider: 2.8.1
+
+実施:
+- python -m unittest discover -s tests -v: 12件成功
+- terraform fmt -recursive: 整形済み
+- terraform init -backend=false -input=false: 成功
+- terraform validate: 成功
+- terraform test -no-color: 3件成功 / 0件失敗
+  - IAM認証、オンデマンド、障害訓練の既定OFF、呼び出し権限の制限
+  - メモリ・ログ保持期間の設定変更とテーブル名の維持
+  - 不正なメモリ設定の拒否
+
+TerraformテストはAWSプロバイダーのモックとplanを使用。
+initではプロバイダーを公式配布元から取得し署名を確認。
+AWSへのplan/apply、リソース作成、権限変更、API試験は未実施。
+既存のReadOnlyAccessを維持。
+実環境のデータ保持・権限・ログ・再構築・料金は未検証。
+GitHub Actions上での実行、CloudFormation版、CDK版は未実施。

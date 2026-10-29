@@ -1,0 +1,160 @@
+{
+  "Description": "Personal content API portfolio - AWS CDK",
+  "Resources": {
+    "Articles47CFF050": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "article_id",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "article_id",
+            "KeyType": "HASH"
+          }
+        ],
+        "TableName": "nilab-content-cdk"
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "ApiLogs3D05D88B": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/nilab-content-cdk",
+        "RetentionInDays": 7
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "RuntimeRoleFD8790A4": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PermissionsBoundary": "arn:aws:iam::364561592630:policy/nilab-content-cdk-runtime-boundary",
+        "RoleName": "nilab-content-cdk-runtime"
+      }
+    },
+    "RuntimePolicy": {
+      "Type": "AWS::IAM::RolePolicy",
+      "Properties": {
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "Articles47CFF050",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": "arn:aws:logs:ap-northeast-1:364561592630:log-group:/aws/lambda/nilab-content-cdk:*"
+            }
+          ]
+        },
+        "PolicyName": "nilab-content-cdk-runtime",
+        "RoleName": {
+          "Ref": "RuntimeRoleFD8790A4"
+        }
+      }
+    },
+    "ApiFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "ZipFile": "\"\"\"Shared application for Terraform, CloudFormation and CDK deployments.\"\"\"\nimport base64\nimport binascii\nimport json\nimport logging\nimport os\nimport re\nimport uuid\nfrom datetime import datetime, timezone\n\nLOGGER = logging.getLogger(__name__)\nLOGGER.setLevel(logging.INFO)\n_TABLE = None\nID_PATTERN = re.compile(r\"^[0-9a-f]{32}$\")\n\n\ndef table():\n    global _TABLE\n    if os.environ.get(\"SIMULATE_STORAGE_FAILURE\", \"false\") == \"true\":\n        raise RuntimeError(\"storage_failure_drill\")\n    if _TABLE is None:\n        import boto3\n        _TABLE = boto3.resource(\"dynamodb\").Table(os.environ[\"TABLE_NAME\"])\n    return _TABLE\n\n\ndef response(status, payload):\n    return {\n        \"statusCode\": status,\n        \"headers\": {\"content-type\": \"application/json; charset=utf-8\"},\n        \"body\": json.dumps(payload, ensure_ascii=False),\n    }\n\n\ndef handler(event, context):\n    request_id = getattr(context, \"aws_request_id\", \"local\")\n    method = event.get(\"requestContext\", {}).get(\"http\", {}).get(\"method\", \"\")\n    path = event.get(\"rawPath\", \"\")\n    try:\n        if path == \"/health\" and method == \"GET\":\n            # Liveness only: this route does not check DynamoDB availability.\n            result = response(200, {\"status\": \"ok\"})\n        elif path == \"/articles\" and method == \"POST\":\n            headers = {k.lower(): v for k, v in event.get(\"headers\", {}).items()}\n            if headers.get(\"content-type\", \"\").split(\";\")[0].strip().lower() != \"application/json\":\n                result = response(415, {\"error\": \"application_json_required\"})\n            else:\n                result = create_article(event)\n        elif path.startswith(\"/articles/\") and method == \"GET\":\n            article_id = path[len(\"/articles/\"):]\n            if not ID_PATTERN.fullmatch(article_id):\n                result = response(400, {\"error\": \"invalid_article_id\"})\n            else:\n                item = table().get_item(Key={\"article_id\": article_id}, ConsistentRead=True).get(\"Item\")\n                result = response(200, item) if item else response(404, {\"error\": \"not_found\"})\n        else:\n            result = response(404, {\"error\": \"route_not_found\"})\n    except Exception:\n        # Stack traces are logged; credentials and article bodies are never logged.\n        LOGGER.exception(\"storage_or_application_error request_id=%s\", request_id)\n        result = response(503, {\"error\": \"service_unavailable\", \"request_id\": request_id})\n    LOGGER.info(json.dumps({\"request_id\": request_id, \"method\": method,\n                            \"status\": result[\"statusCode\"]}))\n    return result\n\n\ndef create_article(event):\n    raw = event.get(\"body\") or \"\"\n    try:\n        if event.get(\"isBase64Encoded\"):\n            raw = base64.b64decode(raw, validate=True).decode(\"utf-8\")\n        if len(raw.encode(\"utf-8\")) > 50000:\n            return response(413, {\"error\": \"body_too_large\"})\n        payload = json.loads(raw)\n    except (ValueError, UnicodeError, binascii.Error):\n        return response(400, {\"error\": \"invalid_json\"})\n    if not isinstance(payload, dict) or set(payload) != {\"title\", \"content\"}:\n        return response(400, {\"error\": \"title_and_content_required\"})\n    title, content = payload[\"title\"], payload[\"content\"]\n    if (not isinstance(title, str) or not 1 <= len(title.strip()) <= 200\n            or not isinstance(content, str) or not 1 <= len(content.strip()) <= 10000):\n        return response(400, {\"error\": \"invalid_title_or_content\"})\n    item = {\"article_id\": uuid.uuid4().hex, \"title\": title.strip(), \"content\": content,\n            \"created_at\": datetime.now(timezone.utc).isoformat()}\n    table().put_item(Item=item, ConditionExpression=\"attribute_not_exists(article_id)\")\n    return response(201, item)\n"
+        },
+        "Environment": {
+          "Variables": {
+            "TABLE_NAME": {
+              "Ref": "Articles47CFF050"
+            },
+            "SIMULATE_STORAGE_FAILURE": "false"
+          }
+        },
+        "FunctionName": "nilab-content-cdk",
+        "Handler": "index.handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "RuntimeRoleFD8790A4",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.13",
+        "Timeout": 10
+      },
+      "DependsOn": [
+        "ApiLogs3D05D88B",
+        "RuntimePolicy"
+      ]
+    },
+    "FunctionUrl": {
+      "Type": "AWS::Lambda::Url",
+      "Properties": {
+        "AuthType": "AWS_IAM",
+        "TargetFunctionArn": {
+          "Fn::GetAtt": [
+            "ApiFunction",
+            "Arn"
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "FunctionUrlOutput": {
+      "Value": {
+        "Fn::GetAtt": [
+          "FunctionUrl",
+          "FunctionUrl"
+        ]
+      }
+    },
+    "FunctionArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ApiFunction",
+          "Arn"
+        ]
+      }
+    },
+    "TableName": {
+      "Value": {
+        "Ref": "Articles47CFF050"
+      }
+    },
+    "LogGroupName": {
+      "Value": {
+        "Ref": "ApiLogs3D05D88B"
+      }
+    }
+  }
+}

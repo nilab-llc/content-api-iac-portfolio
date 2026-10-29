@@ -1,0 +1,5 @@
+[
+  {"ParameterKey": "MemoryMb", "ParameterValue": "128"},
+  {"ParameterKey": "LogRetentionDays", "ParameterValue": "7"},
+  {"ParameterKey": "SimulateStorageFailure", "ParameterValue": "false"}
+]

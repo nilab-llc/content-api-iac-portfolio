@@ -1,0 +1,44 @@
+2026-10-28 / Terraform版のAWS初回構築・動作確認
+
+承認: ユーザー「低コストならOK 進めて」
+対象アカウント: 364561592630 / 東京 ap-northeast-1
+SSOプロファイル: nilab-readonly（名前は初期のまま。構築用追加権限は反映済み）
+
+保存済みplanを再確認:
+- managed resourceは6件、すべてcreate。
+- Function URLはAWS_IAM。
+- Lambda実行ロールに指定した権限境界はnilab-content-tf-runtime-boundary。
+
+terraform apply reviewed.tfplan:
+- 成功。6 added / 0 changed / 0 destroyed。
+- CloudWatchロググループ /aws/lambda/nilab-content-tf（保持7日）
+- DynamoDB nilab-content-tf（オンデマンド）
+- IAMロール nilab-content-tf-runtime（権限境界付き）
+- 上記実行ロールの限定インラインポリシー
+- Lambda nilab-content-tf（Python3.13 / 128MB / timeout10秒）
+- Function URL（AWS_IAM）
+
+共通verify_live.py試験:
+- 未認証 GET /health: 403（拒否）
+- IAM署名付き GET /health: 200
+- IAM署名付き POST /articles: 201
+- 登録した記事のGET: 200 / 応答内容完全一致
+- テスト記事ID: ae78201698d6437aab0a2ac8cfcfce8f
+- テスト記事は1件残存。削除APIは実装していない。
+
+作成後terraform plan -detailed-exitcode:
+- exit 0 / No changes. 設定とAWSの差分なし。
+
+状態ファイルのコピーをプロジェクト外のwork/state-backups/content-api-tf/へ保存。
+このバックアップは同じ端末上の手動コピーで、遠隔バックアップやアクセス制御の追加ではない。
+tfstate / plan / app.zip / SDK作業用フォルダーを公開しない。
+
+未実施:
+- メモリ・ログ保持期間の設定変更と既存データ保持の確認
+- AWS環境の障害訓練と復旧
+- 削除・再構築
+- CloudFormation版 / CDK版
+- GitHub公開 / Actions上での実行
+- 実際の請求額確認（料金反映には遅延があり得る）
+
+構成はAWS上に残している。継続的なテスト呼び出しや負荷試験は実行していない。
